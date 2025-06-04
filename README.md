@@ -16,7 +16,7 @@
 ## 安装
 
 ```bash
-go get github.com/sooboy/DTraderHQ/client/go
+go get github.com/DTrader-store/level2-client-go
 ```
 
 ## 快速开始
@@ -26,7 +26,7 @@ package main
 
 import (
     "log"
-    "github.com/sooboy/DTraderHQ/client/go"
+    "github.com/DTrader-store/level2-client-go"
 )
 
 func main() {

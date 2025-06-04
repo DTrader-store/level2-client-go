@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	dtraderhq "github.com/sooboy/dzh/client/go"
+	dtraderhq "github.com/DTrader-store/level2-client-go"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	dtraderhq "github.com/sooboy/dzh/client/go"
+	dtraderhq "github.com/DTrader-store/level2-client-go"
 )
 
 func main() {
@@ -40,8 +40,8 @@ func main() {
 		for {
 			select {
 			case data := <-client.DataChannel():
-				fmt.Printf("收到市场数据: 股票=%s, 类型=%d, 价格=%.2f, 时间=%d\n",
-					data.StockCode, data.DataType, data.Price, data.Timestamp)
+				fmt.Printf("收到市场数据: 股票=%s, 类型=%d, 时间=%d\n",
+					data.StockCode, data.DataType, data.Timestamp)
 			case err := <-client.ErrorChannel():
 				fmt.Printf("收到错误: %v\n", err)
 			}
