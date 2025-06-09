@@ -69,9 +69,99 @@ func main() {
 		for {
 			select {
 			case data := <-client.DataChannel():
-				t := time.Unix(0, data.Timestamp)
-				fmt.Printf("收到数据: 股票=%s, 类型=%s, 时间=%s\n",
-					data.StockCode, Type(data.DataType), t.Format("2006-01-02 15:04:05"))
+				if data.DataType == 4 {
+					// 处理逐笔成交数据
+					transactionData, ok := data.Data.(map[string]interface{})
+					if ok {
+						price, _ := transactionData["Price"].(float64)
+						volume, _ := transactionData["Volume"].(float64)
+						timestamp, _ := transactionData["Time"].(float64)
+
+						// 价格需要除以10000才是实际价格
+						actualPrice := price / 100.0
+
+						// 转换时间戳为可读时间
+						timeStr := time.Unix(int64(timestamp), 0).Format("15:04:05")
+
+						fmt.Printf("[逐笔成交] 股票: %s, 价格: %.4f, 成交量: %.0f, 时间: %s\n",
+							data.StockCode, actualPrice, volume, timeStr)
+					} else {
+						fmt.Printf("[逐笔成交] 数据格式错误: %v\n", data.Data)
+					}
+				} else if data.DataType == 8 {
+					// 处理逐笔大单数据
+					bigOrderData, ok := data.Data.(map[string]interface{})
+					if ok {
+						buyOrderId, _ := bigOrderData["BuyOrderIdWithFlag"].(float64)
+						sellOrderId, _ := bigOrderData["SellOrderIdWithFlag"].(float64)
+						buyPrice, _ := bigOrderData["BuyPrice"].(float64)
+						sellPrice, _ := bigOrderData["SellPrice"].(float64)
+						buyVol, _ := bigOrderData["BuyVol"].(float64)
+						sellVol, _ := bigOrderData["SellVol"].(float64)
+						orderPackId, _ := bigOrderData["OrderPackId"].(float64)
+
+						// 价格需要除以10000才是实际价格
+						actualBuyPrice := buyPrice / 100.0
+						actualSellPrice := sellPrice / 100.0
+
+						fmt.Printf("[逐笔大单] 股票: %s, 包ID: %.0f, 买单ID: %.0f, 卖单ID: %.0f\n",
+							data.StockCode, orderPackId, buyOrderId, sellOrderId)
+						fmt.Printf("          买价: %.4f, 买量: %.0f, 卖价: %.4f, 卖量: %.0f\n",
+							actualBuyPrice, buyVol, actualSellPrice, sellVol)
+					} else {
+						fmt.Printf("[逐笔大单] 数据格式错误: %v\n", data.Data)
+					}
+				} else if data.DataType == 14 {
+					// 处理逐笔委托数据
+					orderData, ok := data.Data.(map[string]interface{})
+					if ok {
+						price, _ := orderData["Price"].(float64)
+						volume, _ := orderData["Volume"].(float64)
+						dateTime, _ := orderData["DateTime"].(float64)
+						index, _ := orderData["Index"].(float64)
+
+						// 价格需要除以10000才是实际价格
+						actualPrice := price / 10000.0
+
+						// 解析委托类型
+						typeArr, ok := orderData["Type"].([]interface{})
+						typeDesc := ""
+						if ok && len(typeArr) >= 2 {
+							// 第一个字节: 66(B)表示买入, 83(S)表示卖出
+							// 第二个字节: 65(A)表示报单, 68(D)表示撤单
+							firstByte, _ := typeArr[0].(float64)
+							secondByte, _ := typeArr[1].(float64)
+
+							if firstByte == 66 {
+								typeDesc += "买入"
+							} else if firstByte == 83 {
+								typeDesc += "卖出"
+							}
+
+							if secondByte == 65 {
+								typeDesc += "报单"
+							} else if secondByte == 68 {
+								typeDesc += "撤单"
+							}
+						}
+
+						// 解析时间格式 112940640 -> 11:29:40.640
+						dateTimeStr := fmt.Sprintf("%09.0f", dateTime)
+						timeStr := ""
+						if len(dateTimeStr) >= 9 {
+							hour := dateTimeStr[0:2]
+							minute := dateTimeStr[2:4]
+							second := dateTimeStr[4:6]
+							millisecond := dateTimeStr[6:9]
+							timeStr = fmt.Sprintf("%s:%s:%s.%s", hour, minute, second, millisecond)
+						}
+
+						fmt.Printf("[逐笔委托] 股票: %s, 价格: %.4f, 数量: %.0f, 类型: %s, 时间: %s, 索引: %.0f\n",
+							data.StockCode, actualPrice, volume, typeDesc, timeStr, index)
+					} else {
+						fmt.Printf("[逐笔委托] 数据格式错误: %v\n", data.Data)
+					}
+				}
 			case err := <-client.ErrorChannel():
 				fmt.Printf("收到错误: %v\n", err)
 			}
