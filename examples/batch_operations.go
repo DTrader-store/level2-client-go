@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	dtraderhq "github.com/DTrader-store/level2-client-go"
@@ -13,7 +14,7 @@ func Type(t int) string {
 	case 4:
 		return "逐笔成交"
 	case 8:
-		return "逐笔大单"
+		return "逐笔明细"
 	case 14:
 		return "逐笔委托"
 	default:
@@ -23,7 +24,7 @@ func Type(t int) string {
 
 func main() {
 	// 创建客户端
-	client := dtraderhq.NewClient("ws://localhost:8080/ws")
+	client := dtraderhq.NewClient("ws://127.0.0.1:8080/ws")
 
 	// 连接到服务器
 	if err := client.Connect(); err != nil {
@@ -32,7 +33,7 @@ func main() {
 	defer client.Close()
 
 	// 认证
-	token := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJ1c2VybmFtZSI6InNvb2JveSIsImV4cCI6MTc4MDE5MTMyNSwiaWF0IjoxNzQ5MDg3MzI1fQ.qwYExSfL2qz5G4u6rhXxPYr3wkezmwOCYb6OfL3tVZk"
+	token := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoyLCJ1c2VybmFtZSI6InNvb2JveTIiLCJleHAiOjE3ODA3OTgwMDIsImlhdCI6MTc0OTY5NDAwMn0.qmERZ7GZFEcGrq2076G-AtcK0MN0EPn8eRlqtCZAu-o"
 	if err := client.Authenticate(token); err != nil {
 		log.Fatalf("认证失败: %v", err)
 	}
@@ -48,13 +49,14 @@ func main() {
 
 	// 演示批量订阅
 	subscriptions := []dtraderhq.SubscribeMessage{
-		{StockCode: "000001", DataTypes: []int{4, 8}},     // 平安银行：逐笔成交+逐笔大单
+		{StockCode: "000001", DataTypes: []int{4, 8}},     // 平安银行：逐笔成交+逐笔明细
 		{StockCode: "000002", DataTypes: []int{4, 14}},    // 万科A：逐笔成交+逐笔委托
-		{StockCode: "600000", DataTypes: []int{4, 8, 14}}, // 浦发银行：逐笔成交+逐笔大单+逐笔委托
+		{StockCode: "600000", DataTypes: []int{4, 8, 14}}, // 浦发银行：逐笔成交+逐笔明细+逐笔委托
 		{StockCode: "600036", DataTypes: []int{4}},        // 招商银行：逐笔成交
-		{StockCode: "600519", DataTypes: []int{4, 8}},     // 贵州茅台：逐笔成交+逐笔大单
-		{StockCode: "002177", DataTypes: []int{4, 8}},     // 贵州茅台：逐笔成交+逐笔大单
-		{StockCode: "002094", DataTypes: []int{4, 8}},     // 贵州茅台：逐笔成交+逐笔大单
+		{StockCode: "600519", DataTypes: []int{4, 8}},     // 贵州茅台：逐笔成交+逐笔明细
+		{StockCode: "002177", DataTypes: []int{14}},       // 贵州茅台：逐笔成交+逐笔明细
+		{StockCode: "002094", DataTypes: []int{4, 8}},     // 贵州茅台：逐笔成交+逐笔明细
+		// {StockCode: "000001", DataTypes: []int{4, 14}},
 	}
 
 	fmt.Printf("批量订阅 %d 只股票...\n", len(subscriptions))
@@ -69,59 +71,122 @@ func main() {
 		for {
 			select {
 			case data := <-client.DataChannel():
+				log.Printf("[数据流转] 收到数据: 股票=%s, 类型=%d, 数据结构=%T", data.StockCode, data.DataType, data.Data)
+
 				if data.DataType == 4 {
-					// 处理逐笔成交数据
-					transactionData, ok := data.Data.(map[string]interface{})
-					if ok {
+					// 处理逐笔成交数据 - 支持单个对象和数组两种格式
+					var transactionDatas []map[string]interface{}
+
+					// 尝试解析为数组格式
+					if dataArray, ok := data.Data.([]interface{}); ok {
+						log.Printf("[数据流转] 逐笔成交数据为数组格式，长度: %d", len(dataArray))
+						for _, item := range dataArray {
+							if itemMap, ok := item.(map[string]interface{}); ok {
+								transactionDatas = append(transactionDatas, itemMap)
+							}
+						}
+					} else if dataMap, ok := data.Data.(map[string]interface{}); ok {
+						// 单个对象格式
+						log.Printf("[数据流转] 逐笔成交数据为单个对象格式")
+						transactionDatas = append(transactionDatas, dataMap)
+					} else {
+						log.Printf("[数据流转] 逐笔成交数据格式无法识别: %T, 内容: %v", data.Data, data.Data)
+						continue
+					}
+
+					log.Printf("[数据流转] 成功解析 %d 条逐笔成交记录", len(transactionDatas))
+					for i, transactionData := range transactionDatas {
 						price, _ := transactionData["Price"].(float64)
 						volume, _ := transactionData["Volume"].(float64)
 						timestamp, _ := transactionData["Time"].(float64)
+						orderPackId, _ := transactionData["OrderPackId"].(float64)
 
-						// 价格需要除以10000才是实际价格
+						// 价格需要除以100才是实际价格
 						actualPrice := price / 100.0
 
 						// 转换时间戳为可读时间
 						timeStr := time.Unix(int64(timestamp), 0).Format("15:04:05")
 
-						fmt.Printf("[逐笔成交] 股票: %s, 价格: %.4f, 成交量: %.0f, 时间: %s\n",
-							data.StockCode, actualPrice, volume, timeStr)
-					} else {
-						fmt.Printf("[逐笔成交] 数据格式错误: %v\n", data.Data)
+						if i < 3 || math.Abs(volume) > 100_00 { // 显示前3条
+							fmt.Printf("[逐笔成交] 股票: %s, 价格: %.4f, 成交量: %.0f, 时间: %s, 成交ID: %.0f\n",
+								data.StockCode, actualPrice, volume, timeStr, orderPackId)
+						}
 					}
 				} else if data.DataType == 8 {
-					// 处理逐笔大单数据
-					bigOrderData, ok := data.Data.(map[string]interface{})
-					if ok {
-						buyOrderId, _ := bigOrderData["BuyOrderIdWithFlag"].(float64)
-						sellOrderId, _ := bigOrderData["SellOrderIdWithFlag"].(float64)
+					// 处理逐笔明细数据 - 支持单个对象和数组两种格式
+					var bigOrderDatas []map[string]interface{}
+
+					// 尝试解析为数组格式
+					if dataArray, ok := data.Data.([]interface{}); ok {
+						log.Printf("[数据流转] 逐笔明细数据为数组格式，长度: %d", len(dataArray))
+						for _, item := range dataArray {
+							if itemMap, ok := item.(map[string]interface{}); ok {
+								bigOrderDatas = append(bigOrderDatas, itemMap)
+							}
+						}
+					} else if dataMap, ok := data.Data.(map[string]interface{}); ok {
+						// 单个对象格式
+						log.Printf("[数据流转] 逐笔明细数据为单个对象格式")
+						bigOrderDatas = append(bigOrderDatas, dataMap)
+					} else {
+						log.Printf("[数据流转] 逐笔明细数据格式无法识别: %T, 内容: %v", data.Data, data.Data)
+						continue
+					}
+
+					log.Printf("[数据流转] 成功解析 %d 条逐笔明细记录", len(bigOrderDatas))
+					for i, bigOrderData := range bigOrderDatas {
+						buyOrderId, _ := bigOrderData["BuyOrderPackId"].(float64)
+						sellOrderId, _ := bigOrderData["SellOrderPackId"].(float64)
+						buyOrderFlag, _ := bigOrderData["BuyFlag"].(float64)
+						sellOrderFlag, _ := bigOrderData["SellFlag"].(float64)
 						buyPrice, _ := bigOrderData["BuyPrice"].(float64)
 						sellPrice, _ := bigOrderData["SellPrice"].(float64)
 						buyVol, _ := bigOrderData["BuyVol"].(float64)
 						sellVol, _ := bigOrderData["SellVol"].(float64)
 						orderPackId, _ := bigOrderData["OrderPackId"].(float64)
 
-						// 价格需要除以10000才是实际价格
+						// 价格需要除以100才是实际价格
 						actualBuyPrice := buyPrice / 100.0
 						actualSellPrice := sellPrice / 100.0
 
-						fmt.Printf("[逐笔大单] 股票: %s, 包ID: %.0f, 买单ID: %.0f, 卖单ID: %.0f\n",
-							data.StockCode, orderPackId, buyOrderId, sellOrderId)
-						fmt.Printf("          买价: %.4f, 买量: %.0f, 卖价: %.4f, 卖量: %.0f\n",
-							actualBuyPrice, buyVol, actualSellPrice, sellVol)
-					} else {
-						fmt.Printf("[逐笔大单] 数据格式错误: %v\n", data.Data)
+						if i < 3 { // 只显示前3条大单记录
+							fmt.Printf("[逐笔明细] 股票: %s, 包ID: %.0f, 买单ID: %.0f,买标识:%.0f, 卖单ID: %.0f,卖标识:%.0f \n",
+								data.StockCode, orderPackId, buyOrderId, buyOrderFlag, sellOrderId, sellOrderFlag)
+							fmt.Printf("          买价: %.4f, 买量: %.0f, 卖价: %.4f, 卖量: %.0f\n",
+								actualBuyPrice, buyVol, actualSellPrice, sellVol)
+						}
 					}
+
 				} else if data.DataType == 14 {
-					// 处理逐笔委托数据
-					orderData, ok := data.Data.(map[string]interface{})
-					if ok {
+					// 处理逐笔委托数据 - 支持单个对象和数组两种格式
+					var orderDatas []map[string]interface{}
+
+					// 尝试解析为数组格式
+					if dataArray, ok := data.Data.([]interface{}); ok {
+						log.Printf("[数据流转] 逐笔委托数据为数组格式，长度: %d", len(dataArray))
+						for _, item := range dataArray {
+							if itemMap, ok := item.(map[string]interface{}); ok {
+								orderDatas = append(orderDatas, itemMap)
+							}
+						}
+					} else if dataMap, ok := data.Data.(map[string]interface{}); ok {
+						// 单个对象格式
+						log.Printf("[数据流转] 逐笔委托数据为单个对象格式")
+						orderDatas = append(orderDatas, dataMap)
+					} else {
+						log.Printf("[数据流转] 逐笔委托数据格式无法识别: %T, 内容: %v", data.Data, data.Data)
+						continue
+					}
+
+					log.Printf("[数据流转] 成功解析 %d 条逐笔委托记录", len(orderDatas))
+					for i, orderData := range orderDatas {
 						price, _ := orderData["Price"].(float64)
 						volume, _ := orderData["Volume"].(float64)
 						dateTime, _ := orderData["DateTime"].(float64)
 						index, _ := orderData["Index"].(float64)
 
-						// 价格需要除以10000才是实际价格
-						actualPrice := price / 10000.0
+						// 价格需要除以100才是实际价格
+						actualPrice := price / 100.0
 
 						// 解析委托类型
 						typeArr, ok := orderData["Type"].([]interface{})
@@ -156,10 +221,10 @@ func main() {
 							timeStr = fmt.Sprintf("%s:%s:%s.%s", hour, minute, second, millisecond)
 						}
 
-						fmt.Printf("[逐笔委托] 股票: %s, 价格: %.4f, 数量: %.0f, 类型: %s, 时间: %s, 索引: %.0f\n",
-							data.StockCode, actualPrice, volume, typeDesc, timeStr, index)
-					} else {
-						fmt.Printf("[逐笔委托] 数据格式错误: %v\n", data.Data)
+						if i < 3 || volume > 100_00 { // 只显示前3条记录或大额委托
+							fmt.Printf("[逐笔委托] 股票: %s, 价格: %.4f, 数量: %.0f, 类型: %s, 时间: %s, 索引: %.0f\n",
+								data.StockCode, actualPrice, volume, typeDesc, timeStr, index)
+						}
 					}
 				}
 			case err := <-client.ErrorChannel():
@@ -172,12 +237,12 @@ func main() {
 	time.Sleep(10 * time.Second)
 
 	// 演示单个订阅
-	fmt.Println("添加单个股票订阅...")
-	if err := client.Subscribe("300750", []int{4, 8}); err != nil { // 逐笔成交+逐笔大单
-		log.Printf("单个订阅失败: %v", err)
-	} else {
-		fmt.Println("单个订阅请求已发送")
-	}
+	// fmt.Println("添加单个股票订阅...")
+	// if err := client.Subscribe("300750", []int{4, 8}); err != nil { // 逐笔成交+逐笔明细
+	// 	log.Printf("单个订阅失败: %v", err)
+	// } else {
+	// 	fmt.Println("单个订阅请求已发送")
+	// }
 
 	// time.Sleep(5 * time.Second)
 
@@ -194,7 +259,7 @@ func main() {
 
 	// // 演示重置订阅
 	// newSubscriptions := []dtraderhq.SubscribeMessage{
-	// 	{StockCode: "002415", DataTypes: []int{4, 8}}, // 海康威视：逐笔成交+逐笔大单
+	// 	{StockCode: "002415", DataTypes: []int{4, 8}}, // 海康威视：逐笔成交+逐笔明细
 	// 	{StockCode: "002594", DataTypes: []int{14}},   // 比亚迪：逐笔委托
 	// }
 
